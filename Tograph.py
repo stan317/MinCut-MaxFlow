@@ -113,14 +113,15 @@ def boundary_term(img: np.array, p: list, q: list, sigma: np.array) -> float:
     return np.exp(-(img[p]-img[q])**2 / (2*sigma**2)) / dist(p, q)
 
 
-def capacity(img: np.array, p: list, q:list, sigma: np.array, lambda_:float =1.) -> float:
+def capacity(img: np.array, p: list, q:list, mu: np.array, sigma: np.array, lambda_:float =1.) -> float:
     """
     Compute the capacity of an edge
 
     :param img:
     :param p:
     :param q:
-    :param sigma:
+    :param mu: means of the image pixels contained in the object and the background
+    :param sigma: standard deviations of the image pixels contained in the object and the background
     :param lambda_:
     :rtype: float
     """
@@ -148,12 +149,13 @@ def add_S_T(graph: nx.Graph):
     graph.add_edge()
 
 
-def create_graph(img: np.array) -> nx.Graph:
+def create_graph(img: np.array, mu: np.array, sigma: np.array) -> nx.Graph:
     """
     Create the directed and weighted graph associated to the given image
 
     :param img: studied image
-    :param sigma:
+    :param mu: means of the image pixels contained in the object and the background
+    :param sigma: standard deviations of the image pixels contained in the object and the background
     :rtype: nx.Graph
     """
 
@@ -170,7 +172,8 @@ def create_graph(img: np.array) -> nx.Graph:
             neighbors = get_neighbors_undirect(i, j, n, m)
             
             for node in neighbors:
-                w = capacity(img, [i,j], [node[0],node[2]])
+
+                w = capacity(img, [i,j], [node[0],node[2]], mu, sigma)
                 graph.add_edge(str(i)+","+str(j), node, weight=w)
     
     return graph
@@ -196,4 +199,4 @@ if __name__=='main':
     y1 = img[O]
     mu[1], sigma[1] = y1.mean(), y1.std()
 
-    
+    graph = create_graph(img)
