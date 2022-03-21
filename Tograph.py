@@ -86,7 +86,7 @@ def regional_term(img: np.array, mean: np.array, std: np.array) -> np.array:
     gauss_obj = gaussian(img, mean[1], std[1])
     gauss_bkg = gaussian(img, mean[0], std[0])
 
-    return np.log(gauss_obj), np.log(gauss_bkg)
+    return -np.log(gauss_obj), -np.log(gauss_bkg)
 
 
 def dist(x, y):
