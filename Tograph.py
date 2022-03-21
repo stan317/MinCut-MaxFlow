@@ -106,7 +106,7 @@ def boundary_term(img: np.array, p: tuple, q: tuple, Sigma: np.array) -> float:
     Compute the interaction potential between two image pixels
 
     :param img: studied image
-    :param (p, q): the two nodes that are linked by the edge we want to compute the weight
+    :param (p, q): the two nodes that are linked by the edge we want to compute the capacity
     :param Sigma: hyperparameter of the problem
     :rtype: float
     """
@@ -139,14 +139,14 @@ def create_graph(img: np.array, Sigma: np.array) -> nx.Graph:
             for node in neighbors:
                 v = node.split(",")
                 w = boundary_term(img, (i,j), (int(v[0]),int(v[1])), Sigma)
-                graph.add_edge(str(i)+","+str(j), node, weight=w)
+                graph.add_edge(str(i)+","+str(j), node, capacity=w)
 
     return graph
 
 
 def add_S_T(graph: nx.Graph, img: np.array, hard_cstr:np.array, mean: np.array, std: np.array, lambda_: float =1.) -> nx.Graph:
     """
-    Add the sink and source points to the graph with corresponding weights
+    Add the sink and source points to the graph with corresponding capacity
 
     :param graph : pre-constructed graph with all the nodes of the pixels linked
     :pram
@@ -156,7 +156,7 @@ def add_S_T(graph: nx.Graph, img: np.array, hard_cstr:np.array, mean: np.array, 
     #Compute the edge value of the edges between sink or source and pixels corresponding to hard constraints
     K = 0
     for node in graph.nodes:
-        K = np.maximum(K, np.sum([graph.get_edge_data(node, neighbor)["weight"] for neighbor in graph.neighbors(node)]))
+        K = np.maximum(K, np.sum([graph.get_edge_data(node, neighbor)["capacity"] for neighbor in graph.neighbors(node)]))
     K += 1
 
 
@@ -170,7 +170,7 @@ def add_S_T(graph: nx.Graph, img: np.array, hard_cstr:np.array, mean: np.array, 
     bkg_cstr = bkg_cstr.reshape((n,2))
 
     for x in tqdm(bkg_cstr):
-        graph.add_edge(str(x[0])+","+str(x[1]), "T", weight=K)
+        graph.add_edge(str(x[0])+","+str(x[1]), "T", capacity=K)
 
 
     #Add edges between source and pixels of object hard constraint 
@@ -179,19 +179,19 @@ def add_S_T(graph: nx.Graph, img: np.array, hard_cstr:np.array, mean: np.array, 
     obj_cstr = obj_cstr.reshape((n,2))
 
     for x in tqdm(obj_cstr):
-        graph.add_edge("S", str(x[0])+","+str(x[1]), weight=K)
+        graph.add_edge("S", str(x[0])+","+str(x[1]), capacity=K)
 
 
     #Add edges between the source and sink nodes and the pixels that have no hard constraint
-    no_cstr = np.vstack(np.where(hard_cstr[:,:,0]==0))
-    n = no_cstr.shape[1]
-    no_cstr = no_cstr.reshape((n,2))
+    #no_cstr = np.vstack(np.where(hard_cstr[:,:,0]==0))
+    #n = no_cstr.shape[1]
+    #no_cstr = no_cstr.reshape((n,2))
 
-    RT, RS = regional_term(img, mean, std)
+    #RT, RS = regional_term(img, mean, std)
 
-    for x in tqdm(no_cstr):
-        graph.add_edge(str(x[0])+","+str(x[1]), "T", weight=lambda_*RT)
-        graph.add_edge("S", str(x[0])+","+str(x[1]), weight=lambda_*RS)
+    #for x in tqdm(no_cstr):
+        #graph.add_edge(str(x[0])+","+str(x[1]), "T", capacity=lambda_*RT)
+        #graph.add_edge("S", str(x[0])+","+str(x[1]), capacity=lambda_*RS)
 
 
     return graph
