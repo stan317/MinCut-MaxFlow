@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 from skimage.color import rgb2gray
 from skimage.io import imread
+from scipy.stats import gaussian_kde
 from tqdm import tqdm
 
 # For graph related operations
@@ -72,21 +73,20 @@ def gaussian(img: np.array, mu: float, sigma: float) -> np.array:
     return num / den
 
 
-def regional_term(img: np.array, mean: np.array, std: np.array) -> np.array:
+def regional_term(B_vals: np.array, O_vals: np.array) -> tuple:
     """
     Returns the log-likelihood ratio of all pixels (This is independant of X, but depends on mu and sigma)
     Corresponds to the regional term of the energy and is motivated by the MAP-MRF formulation
-
-    :param img: studied image
-    :param mu: means of the image pixels contained in the object and the background
-    :param sigma: standard deviations of the image pixels contained in the object and the background
-    :rtype: np.array
+    
+    :param B_vals: values of the pixels initialized as background
+    :param O_vals: values of the pixels initialized as object
+    :rtype: tuple of anonymous functions
     """
 
-    gauss_obj = gaussian(img, mean[1], std[1])
-    gauss_bkg = gaussian(img, mean[0], std[0])
+    Rp_obj = lambda x : np.clip(- gaussian_kde(O_vals.T).logpdf(x.T), a_min=0, a_max=None)
+    Rp_bkg = lambda x : np.clip(- gaussian_kde(B_vals.T).logpdf(x.T), a_min=0, a_max=None)
 
-    return -np.log(gauss_obj), -np.log(gauss_bkg)
+    return Rp_obj, Rp_bkg
 
 
 def dist(x, y):
@@ -131,6 +131,7 @@ def create_graph(img: np.array, Sigma: np.array) -> nx.Graph:
     nodes = [str(i)+str(j) for i in range(n) for j in range(m)]
     graph.add_nodes_from(nodes)
 
+    print("Progress 1/4 : Creating graph...")
     for i in tqdm(range(n)):
         for j in range(m):
             
@@ -144,7 +145,7 @@ def create_graph(img: np.array, Sigma: np.array) -> nx.Graph:
     return graph
 
 
-def add_S_T(graph: nx.Graph, img: np.array, hard_cstr:np.array, mean: np.array, std: np.array, lambda_: float =1.) -> nx.Graph:
+def add_S_T(graph: nx.Graph, img: np.array, hard_cstr:np.array, lambda_: float =1.) -> nx.Graph:
     """
     Add the sink and source points to the graph with corresponding capacity
 
@@ -165,39 +166,46 @@ def add_S_T(graph: nx.Graph, img: np.array, hard_cstr:np.array, mean: np.array, 
 
 
     #Add edges between sink and pixels of background hard constraint
-    bkg_cstr = np.vstack(np.where(hard_cstr[:,:,0]==219)) #red lines
-    n = bkg_cstr.shape[1]
-    bkg_cstr = bkg_cstr.reshape((n,2))
-
-    for x in tqdm(bkg_cstr):
-        graph.add_edge(str(x[0])+","+str(x[1]), "T", capacity=K)
+    B_rows, B_columns = np.where(hard_cstr[:,:,0]==219) #red lines
+    n = np.size(B_rows)
+    B_vals = np.zeros(n) #values of the pixels initialized as background
+    
+    print("Progress 2/4 : Adding edges between background initializations and the sink")
+    for k in tqdm(range(n)):
+        i, j = B_rows[k], B_columns[k]
+        graph.add_edge(str(i)+","+str(j), "T", capacity=K)
+        B_vals[k] = img[i,j]
 
 
     #Add edges between source and pixels of object hard constraint 
-    obj_cstr = np.vstack(np.where(hard_cstr[:,:,0]==255)) #white lines
-    n = obj_cstr.shape[1]
-    obj_cstr = obj_cstr.reshape((n,2))
+    O_rows, O_columns = np.where(hard_cstr[:,:,0]==255) #white lines
+    n = np.size(O_rows) 
+    O_vals = np.zeros(n) #values of the pixels initialized as object
 
-    for x in tqdm(obj_cstr):
-        graph.add_edge("S", str(x[0])+","+str(x[1]), capacity=K)
-
+    print("Progress 3/4 : Adding edges between object initializations and the source")
+    for k in tqdm(range(n)):
+        i, j = O_rows[k], O_columns[k]
+        graph.add_edge("S", str(i)+","+str(j), capacity=K)
+        O_vals[k] = img[i,j]
+        
 
     #Add edges between the source and sink nodes and the pixels that have no hard constraint
-    #no_cstr = np.vstack(np.where(hard_cstr[:,:,0]==0))
-    #n = no_cstr.shape[1]
-    #no_cstr = no_cstr.reshape((n,2))
+    R_rows, R_columns = np.where(hard_cstr[:,:,0]==0)
+    n = np.size(R_rows)
 
-    #RT, RS = regional_term(img, mean, std)
+    RT, RS = regional_term(O_vals, B_vals)
 
-    #for x in tqdm(no_cstr):
-        #graph.add_edge(str(x[0])+","+str(x[1]), "T", capacity=lambda_*RT)
-        #graph.add_edge("S", str(x[0])+","+str(x[1]), capacity=lambda_*RS)
+    print("Progress 4/4 : Adding edges between the rest of the nodes and the sink and source nodes")
+    for k in tqdm(range(n)):
+        i, j = R_rows[k], R_columns[k]
+        graph.add_edge(str(i)+","+str(j), "T", capacity=lambda_*RT(img[i,j]))
+        graph.add_edge("S", str(i)+","+str(j), capacity=lambda_*RS(img[i,j]))
 
 
     return graph
 
 
-def main(name: str, Sigma: float, lambda_: float =1.):
+def main(name: str, lambda_: float =1.):
     """
     Run a set of functions to create the graph associated to the given image for minimum cut
 
@@ -206,25 +214,13 @@ def main(name: str, Sigma: float, lambda_: float =1.):
     """
 
     img = imread("./data/images/" + name + ".jpg")
-    segmented = imread("./data/images-gt/" + name + ".png")
     hard_cstr = imread("./data/images-labels/" + name + "-anno.png")
 
     gray = rgb2gray(img)
-    mean = np.zeros(2)
-    std = np.zeros(2)
-
-    bkg = (segmented == 0)
-    img_bkg = gray[bkg]
-    mean[0], std[0] = img_bkg.mean(), img_bkg.std()
-
-    obj = (segmented == 255)
-    contour = (segmented == 128)
-    obj_cont = obj + contour
-    img_obj = gray[obj_cont]
-    mean[1], std[1] = img_obj.mean(), img_obj.std()
+    Sigma = np.std(img)
 
     graph = create_graph(gray, Sigma)
-    graph = add_S_T(graph, gray, hard_cstr, mean, std, lambda_)
+    graph = add_S_T(graph, gray, hard_cstr, lambda_)
 
     return graph
 
@@ -243,22 +239,22 @@ if __name__=='main':
     Sigma = float(sys.argv[3])
 
     img = imread("./data/images/" + name + ".jpg")
-    segmented = imread("./data/images-gt/" + name + ".png")
+    #segmented = imread("./data/images-gt/" + name + ".png")
     hard_cstr = imread("./data/images-labels/" + name + "-anno.png")
 
     gray = rgb2gray(img)
     mean = np.zeros(2)
     std = np.zeros(2)
 
-    bkg = (segmented == 0)
-    img_bkg = gray[bkg]
-    mean[0], std[0] = img_bkg.mean(), img_bkg.std()
+    #bkg = (segmented == 0)
+    #img_bkg = gray[bkg]
+    #mean[0], std[0] = img_bkg.mean(), img_bkg.std()
 
-    obj = (segmented == 255)
-    contour = (segmented == 128)
-    obj_cont = obj + contour
-    img_obj = gray[obj_cont]
-    mean[1], std[1] = img_obj.mean(), img_obj.std()
+    #obj = (segmented == 255)
+    #contour = (segmented == 128)
+    #obj_cont = obj + contour
+    #img_obj = gray[obj_cont]
+    #mean[1], std[1] = img_obj.mean(), img_obj.std()
 
     graph = create_graph(gray, Sigma)
-    graph = add_S_T(graph, gray, hard_cstr, mean, std, lambda_)
+    graph = add_S_T(graph, gray, hard_cstr, lambda_)
