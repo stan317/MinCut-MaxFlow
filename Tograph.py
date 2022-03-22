@@ -1,5 +1,4 @@
 import sys
-import cv2
 import numpy as np
 from skimage.color import rgb2gray
 from skimage.io import imread
@@ -128,8 +127,8 @@ def create_graph(img: np.array, Sigma: np.array) -> nx.Graph:
 
     graph = nx.Graph()
 
-    nodes = [str(i)+str(j) for i in range(n) for j in range(m)]
-    graph.add_nodes_from(nodes)
+    nodes = [(str(i)+','+str(j)) for i in range(n) for j in range(m)]
+    graph.add_nodes_from(nodes, terminal = None, parent = None)
 
     print("Progress 1/4 : Creating graph...")
     for i in tqdm(range(n)):
@@ -141,6 +140,7 @@ def create_graph(img: np.array, Sigma: np.array) -> nx.Graph:
                 v = node.split(",")
                 w = boundary_term(img, (i,j), (int(v[0]),int(v[1])), Sigma)
                 graph.add_edge(str(i)+","+str(j), node, capacity=w)
+    print(len(graph.nodes))
 
     return graph
 
@@ -193,19 +193,24 @@ def add_S_T(graph: nx.Graph, img: np.array, hard_cstr:np.array, lambda_: float =
     R_rows, R_columns = np.where(hard_cstr[:,:,0]==0)
     n = np.size(R_rows)
 
-    RT, RS = regional_term(O_vals, B_vals)
+    Rp = Rp_prob(O_vals, B_vals)
+    print(Rp)
 
     print("Progress 4/4 : Adding edges between the rest of the nodes and the sink and source nodes")
     for k in tqdm(range(n)):
         i, j = R_rows[k], R_columns[k]
-        graph.add_edge(str(i)+","+str(j), "T", capacity=lambda_*RT(img[i,j]))
-        graph.add_edge("S", str(i)+","+str(j), capacity=lambda_*RS(img[i,j]))
+        RT_value = lambda_*Rp['obj'](img[i,j])
+        RS_value = lambda_*Rp['bkg'](img[i,j])
+        if RT_value>RS_value:
+            graph.add_edge(str(i)+","+str(j), "T", capacity=RT_value-RS_value)
+        else:
+            graph.add_edge("S", str(i)+","+str(j), capacity=RS_value-RT_value)
 
 
     return graph
 
 
-def main(name: str, lambda_: float =1.):
+def to_graph(img, hard_cstr, lambda_: float =1.):
     """
     Run a set of functions to create the graph associated to the given image for minimum cut
 
@@ -213,8 +218,8 @@ def main(name: str, lambda_: float =1.):
     :param lambda_, Sigma : hyperparameters
     """
 
-    img = imread("./data/images/" + name + ".jpg")
-    hard_cstr = imread("./data/images-labels/" + name + "-anno.png")
+    # img = imread("./dataset/images/" + name + ".jpg")
+    # hard_cstr = imread("./dataset/images-labels/" + name + "-anno.png")
 
     gray = rgb2gray(img)
     Sigma = np.std(img)
@@ -224,6 +229,24 @@ def main(name: str, lambda_: float =1.):
 
     return graph
 
+
+#other Regularisation term implementation
+def Rp_prob(O_vals, B_vals):
+    if isinstance(B_vals[0], np.ndarray) or len(set(list(B_vals))) > 2:
+        log_pdf_O = gaussian_kde(O_vals.T).logpdf
+        Rp_O = lambda x : np.clip(np.log(len(O_vals))-log_pdf_O(x.T), a_min=0, a_max=None)
+    else:
+        log_pdf_O = gaussian_kde(list(np.linspace(0,1,10)) + [O_vals[0]], weights=[1]*10+[100]).logpdf
+        Rp_O = lambda x : np.clip(-log_pdf_O(x.T), a_min=0, a_max=None)
+
+    if isinstance(B_vals[0], np.ndarray) or len(set(list(B_vals))) > 2:
+        log_pdf_B = gaussian_kde(B_vals.T).logpdf
+        Rp_B = lambda x : np.clip(np.log(len(B_vals))-log_pdf_B(x.T), a_min=0, a_max=None)
+    else:
+        log_pdf_B = gaussian_kde(list(np.linspace(0,1,10)) + [B_vals[0]], weights=[1]*10+[100]).logpdf
+        Rp_B = lambda x : np.clip(-log_pdf_B(x.T), a_min=0, a_max=None)
+
+    return dict(obj=Rp_O, bkg=Rp_B)
 
 
 #############################################################################
